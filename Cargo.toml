@@ -1,0 +1,34 @@
+[package]
+name = "commentbuster"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Count net comment lines added in a git diff (Java, Kotlin, TypeScript)"
+license = "MIT"
+
+[lib]
+name = "commentbuster"
+path = "src/lib.rs"
+
+[[bin]]
+name = "commentbuster"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+rayon = "1.12.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+similar = "3.2"
+tree-sitter = "0.27"
+tree-sitter-java = "0.23.5"
+tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-typescript = "0.23.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
