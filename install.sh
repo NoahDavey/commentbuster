@@ -43,7 +43,8 @@ echo "Downloading $asset ($VERSION)"
 curl -fsSL "$base/$asset" -o "$tmp/$asset" || fail "download failed: $base/$asset"
 curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || fail "download failed: $base/SHA256SUMS"
 
-expected=$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
+# Match on the basename so a leading ./ in the sums file does not matter.
+expected=$(awk -v a="$asset" '{ n = $2; sub(/^.*\//, "", n); if (n == a) print $1 }' "$tmp/SHA256SUMS")
 [ -n "$expected" ] || fail "no entry for $asset in SHA256SUMS"
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
