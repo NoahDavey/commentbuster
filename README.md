@@ -42,7 +42,7 @@ The install script picks the right one, verifies its checksum, and puts
 curl -fsSL https://raw.githubusercontent.com/NoahDavey/commentbuster/main/install.sh | sh
 ```
 
-`COMMENTBUSTER_INSTALL_DIR` changes the directory; `COMMENTBUSTER_VERSION=v0.1.0`
+`COMMENTBUSTER_INSTALL_DIR` changes the directory; `COMMENTBUSTER_VERSION=v0.2.0`
 pins a release. With a Rust toolchain, `cargo install --git
 https://github.com/NoahDavey/commentbuster --locked` builds it instead. One binary,
 no runtime dependencies; the Claude Code hook is a subcommand of it.
