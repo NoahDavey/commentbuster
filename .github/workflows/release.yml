@@ -49,10 +49,10 @@ jobs:
           staging="$BIN-${{ matrix.target }}"
           mkdir "$staging"
           cp "target/${{ matrix.target }}/release/$BIN" "$staging/"
-          cp hooks/claude-precommit-gate.sh "$staging/$BIN-claude-gate"
           cp README.md LICENSE "$staging/"
           tar czf "$staging.tar.gz" "$staging"
           "./$staging/$BIN" --version
+          "./$staging/$BIN" claude-gate --help >/dev/null
       - uses: actions/upload-artifact@v5
         with:
           name: ${{ env.BIN }}-${{ matrix.target }}

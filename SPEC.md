@@ -90,6 +90,7 @@ by a test, because it is the shape most likely to look like a bug.
 
 ```
 commentbuster [<ref> [<ref>]] [options]
+commentbuster claude-gate [options]
 ```
 
 ### Ref resolution
@@ -116,7 +117,8 @@ Must be run inside a git work tree; discovers the repo root itself, so it works 
 | `--pretty` | off | Human-readable summary and per-file table instead of JSON. |
 | `--max-net N` | unset | Exit 1 if net comment lines added exceeds `N`. |
 | `--max-ratio P` | unset | Exit 1 if ratio exceeds `P` (a fraction, e.g. `0.05`). |
-| `--min-code-lines N` | `20` | The ratio gate does not apply below this many added code lines. Prevents a 2-line diff with 1 comment scoring 50%. |
+| `--max-net-small N` | unset | Exit 1 if net comment lines added exceeds `N`, on diffs below `--min-code-lines`. The complement of `--max-ratio`: the two never apply to the same diff. |
+| `--min-code-lines N` | `20` | The ratio gate does not apply below this many added code lines, and `--max-net-small` applies only there. Prevents a 2-line diff with 1 comment scoring 50%. |
 | `--top N` | `20` | Show only the N worst files in `--pretty`; `0` shows all. JSON is never truncated. |
 | `--` | | Path filter separator; paths after it limit the diff, mirroring `git diff -- <paths>`. |
 
@@ -129,6 +131,29 @@ With no gate flags the exit code is always 0 — the tool reports and says nothi
 | 0 | Success; no gate breached, or no gate configured |
 | 1 | A configured gate was breached |
 | 2 | Usage error, not a git repo, bad ref, or internal failure |
+
+### `claude-gate` subcommand
+
+The Claude Code `PreToolUse` hook, so the hook needs nothing but the binary.
+Claude Code writes a JSON description of the pending tool call to stdin; the
+subcommand:
+
+1. Extracts `tool_input.command` and allows, printing nothing, unless `git` starts
+   a shell segment and `commit` follows it as a whole word in that segment.
+   `git add -A && git commit -m x` is a commit; `echo "git commit"` is not.
+2. Analyses index vs `HEAD` with `--max-ratio` (default `0.15`) and
+   `--max-net-small` (default `5`) around `--min-code-lines` (default `20`). Each
+   flag falls back to `COMMENTBUSTER_MAX_RATIO`, `COMMENTBUSTER_MAX_NET_SMALL`,
+   `COMMENTBUSTER_MIN_CODE_LINES`.
+3. On a breach prints `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+   "permissionDecision": "deny", "permissionDecisionReason": …}}`, naming the
+   rule, the worst files and what to cut.
+
+The exit code is 0 on every path except a usage error. An explicit "allow" is
+never printed: it would skip Claude Code's permission prompt. Failures of the gate
+itself (not a git repo, unreadable payload) allow with a note on stderr, since
+Claude Code blocks only on exit 2 and a gate that blocks because of its own
+trouble gets disabled. `COMMENTBUSTER_SKIP` set to anything bypasses it.
 
 ---
 
@@ -279,7 +304,8 @@ reporting zero.
 - **Fixture corpus per language** covering every row of the §3 table: trailing comments, bare `*` lines, delimiter-only lines, commented-out code, comment markers inside string literals, nested block comments (Kotlin), Javadoc, KDoc, TSDoc, JSX comments.
 - **Diff-shape fixtures:** pure addition, pure deletion, rename with no content change (must net to zero), rename with edits, new file, deleted file, mode change, comment-only diff (`code_lines_added` 0 → `ratio` null).
 - **Range semantics:** merge-base vs `--direct` on a branch whose base has advanced — asserting the moved base contributes nothing.
-- **Gate matrix:** each threshold, each exit code, `--min-code-lines` suppression.
+- **Gate matrix:** each threshold, each exit code, `--min-code-lines` suppression, `--max-ratio` and `--max-net-small` never both applying to one diff.
+- **Hook protocol:** commit detection against mentions and chained commands, deny JSON shape, silent allow, flag over environment precedence, skip variable, out-of-repo and garbage-payload tolerance.
 - **Golden JSON** snapshots for the output schema.
 - **Timing regression test** on a synthetic several-hundred-file diff.
 
@@ -314,6 +340,8 @@ Recorded so the spec matches the code.
 | `--max-ratio` accepts values above 1 | Found while writing the tests: a diff adding 6 comment lines against 1 code line has a ratio of 6.0. Capping the flag at 1 would have made the pathological cases unexpressible. |
 | `--top N` added, default 20 | Found by running the tool on a 400-file diff: `--pretty` printed 400 rows. JSON is never truncated. |
 | `gate.skipped_rules` added to the JSON | So a green result never quietly means "the gate never ran". |
+| `--max-net-small N` added | The ratio floor leaves small diffs ungated, and a flat `--max-net` tight enough for them caps large, proportionately-commented diffs. A net ceiling that applies only below the floor is the complement the ratio needs. |
+| `claude-gate` subcommand replaces the shell hook | The shell hook reimplemented the thresholds in Python and needed `python3`, against the single-binary constraint in §1. The binary now speaks the PreToolUse protocol itself: one gate implementation, tested. |
 
 ### One interaction worth knowing before setting a CI budget
 
@@ -323,4 +351,4 @@ code lines and 78 comment lines is suppressed by the default floor of 20.
 
 So the ratio gate alone is not enough. **Set both gates in CI**: `--max-ratio` to
 catch comment-heavy large PRs, and `--max-net` to catch the small ones the floor
-lets through.
+lets through, or `--max-net-small` to do the same without capping large PRs.

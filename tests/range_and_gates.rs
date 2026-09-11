@@ -357,3 +357,54 @@ fn a_closed_pipe_is_not_an_error() {
     assert!(!err.contains("panicked"), "panicked on a closed pipe:\n{err}");
     assert!(err.is_empty(), "unexpected stderr: {err}");
 }
+
+#[test]
+fn max_net_small_gate_applies_below_the_code_floor() {
+    let (r, base) = budget_repo("gate_net_small");
+    // 1 added code line is below the default floor of 20, so the small-commit rule decides.
+    let (code, v) = r.run(&[&base, "--max-net-small", "5"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["gate"]["failures"][0]["rule"], "max_net_small");
+    assert_eq!(v["gate"]["failures"][0]["limit"], 5);
+    assert_eq!(v["gate"]["failures"][0]["actual"], 6);
+
+    let (code, _) = r.run(&[&base, "--max-net-small", "6"]);
+    assert_eq!(code, 0, "the limit is inclusive");
+
+    let (code, out, _) = r.run_raw(&[&base, "--pretty", "--color", "never", "--max-net-small", "5"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("FAIL  net 6 exceeds --max-net-small 5"), "{out}");
+}
+
+#[test]
+fn max_net_small_gate_steps_aside_at_or_above_the_code_floor() {
+    let (r, base) = budget_repo("gate_net_small_skipped");
+    let (code, v) = r.run(&[&base, "--max-net-small", "0", "--min-code-lines", "1"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["gate"]["configured"], true);
+    assert_eq!(v["gate"]["passed"], true);
+    assert_eq!(v["gate"]["skipped_rules"][0]["rule"], "max_net_small");
+    assert!(v["gate"]["skipped_rules"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("not below --min-code-lines 1"));
+}
+
+#[test]
+fn ratio_and_net_small_never_both_apply_to_one_diff() {
+    let (r, base) = budget_repo("gate_complementary");
+
+    // Below the floor: the net decides, the ratio is recorded as skipped.
+    let (code, v) = r.run(&[&base, "--max-ratio", "0.15", "--max-net-small", "5"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["gate"]["failures"].as_array().unwrap().len(), 1);
+    assert_eq!(v["gate"]["failures"][0]["rule"], "max_net_small");
+    assert_eq!(v["gate"]["skipped_rules"][0]["rule"], "max_ratio");
+
+    // Floor lowered under the diff: the ratio decides, the net is skipped.
+    let (code, v) = r.run(&[&base, "--max-ratio", "0.15", "--max-net-small", "5", "--min-code-lines", "1"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["gate"]["failures"].as_array().unwrap().len(), 1);
+    assert_eq!(v["gate"]["failures"][0]["rule"], "max_ratio");
+    assert_eq!(v["gate"]["skipped_rules"][0]["rule"], "max_net_small");
+}

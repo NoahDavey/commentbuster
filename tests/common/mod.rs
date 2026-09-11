@@ -93,3 +93,43 @@ pub fn totals(v: &Value) -> (u64, u64, i64, u64, u64) {
         t["code_lines_removed"].as_u64().unwrap(),
     )
 }
+
+impl Repo {
+    /// Run the binary the way Claude Code runs a hook: a JSON payload on stdin
+    /// and any tuning in the environment. The gate's own variables are cleared
+    /// first so a developer's shell cannot leak into the assertions.
+    pub fn run_hook(&self, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> (i32, String, String) {
+        use std::io::Write as _;
+        use std::process::Stdio;
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_commentbuster"));
+        cmd.args(args).current_dir(&self.dir);
+        for var in [
+            "COMMENTBUSTER_SKIP",
+            "COMMENTBUSTER_MAX_RATIO",
+            "COMMENTBUSTER_MAX_NET_SMALL",
+            "COMMENTBUSTER_MIN_CODE_LINES",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.envs(envs.iter().copied());
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn commentbuster");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(stdin.as_bytes())
+            .expect("write payload");
+        let out = child.wait_with_output().expect("wait for commentbuster");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    }
+}

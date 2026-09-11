@@ -36,7 +36,7 @@ commentbuster  main...HEAD (merge-base 6abe7c9dc)
 Prebuilt binaries for macOS (Apple Silicon, Intel) and Linux (x86_64, arm64) are
 attached to each [release](https://github.com/NoahDavey/commentbuster/releases).
 The install script picks the right one, verifies its checksum, and puts
-`commentbuster` and the Claude Code hook `commentbuster-claude-gate` in `~/.local/bin`:
+`commentbuster` in `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/NoahDavey/commentbuster/main/install.sh | sh
@@ -44,9 +44,8 @@ curl -fsSL https://raw.githubusercontent.com/NoahDavey/commentbuster/main/instal
 
 `COMMENTBUSTER_INSTALL_DIR` changes the directory; `COMMENTBUSTER_VERSION=v0.1.0`
 pins a release. With a Rust toolchain, `cargo install --git
-https://github.com/NoahDavey/commentbuster --locked` builds the binary alone; the
-hook script is then `hooks/claude-precommit-gate.sh` in this repo. No runtime
-dependencies either way.
+https://github.com/NoahDavey/commentbuster --locked` builds it instead. One binary,
+no runtime dependencies; the Claude Code hook is a subcommand of it.
 
 ## Usage
 
@@ -90,7 +89,9 @@ commentbuster --max-net 10 --max-ratio 0.15     # exit 1 if either is breached
 
 `--min-code-lines N` (default 20) stops the ratio gate applying to tiny diffs.
 Because of it, **set both gates**: `--max-ratio` catches comment-heavy large PRs,
-`--max-net` catches the small ones the floor lets through.
+and a net ceiling catches the small ones the floor lets through. `--max-net`
+applies to every diff; `--max-net-small` applies only below the floor, so it can
+be set tight without capping large, proportionately-commented changes.
 
 ### CI
 
@@ -112,11 +113,11 @@ Set `COMMENTBUSTER_VERSION` on the install step to pin a release.
 
 ### Claude Code hook (preferred over a git hook for agents)
 
-`hooks/claude-precommit-gate.sh` is a `PreToolUse` hook that checks the staged
-budget when an agent runs `git commit`. The install script places it at
-`~/.local/bin/commentbuster-claude-gate`, so the same entry works on every
-machine. Wire it into a project's `.claude/settings.json` (team-wide) or
-`.claude/settings.local.json` (personal, gitignored):
+`commentbuster claude-gate` is a `PreToolUse` hook. Claude Code pipes it the tool
+call it is about to run; the hook ignores everything but `git commit`, checks the
+staged budget, and on a breach returns a denial the model can act on. Wire it into
+a project's `.claude/settings.json` (team-wide) or `.claude/settings.local.json`
+(personal, gitignored):
 
 ```json
 {
@@ -125,7 +126,7 @@ machine. Wire it into a project's `.claude/settings.json` (team-wide) or
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "$HOME/.local/bin/commentbuster-claude-gate",
+        "command": "$HOME/.local/bin/commentbuster claude-gate",
         "timeout": 20,
         "statusMessage": "Checking comment budget"
       }]
@@ -134,31 +135,34 @@ machine. Wire it into a project's `.claude/settings.json` (team-wide) or
 }
 ```
 
-A teammate who has not installed the binary yet sees a one-line warning and
-their commit goes through, so the hook can land in a team's settings before
-everyone has run the installer. To vendor the script into a repo instead, copy
-it to `.claude/hooks/` and reference it as
-`"$CLAUDE_PROJECT_DIR/.claude/hooks/claude-precommit-gate.sh"`.
+A teammate who has not installed the binary yet gets `command not found` on
+stderr and their commit goes through, because Claude Code blocks only on exit
+code 2. So the hook can land in a team's settings before everyone has run the
+installer. The gate's own failures allow too: an unreadable payload or a
+directory that is not a git repo never stops a commit. A misconfigured flag does
+block, with the usage error, so it gets noticed instead of silently disabling the
+gate.
 
 It beats a git `pre-commit` hook for the agent case on three counts: it intercepts
 the Bash tool call rather than git's hook chain, so `--no-verify` does not get
 around it; it fires only for agents, leaving a human's own commits alone; and its
 denial reason goes back to the model as feedback it can act on.
 
-The gate's two rules are **complementary, not overlapping** — above
-`COMMENTBUSTER_MIN_CODE_LINES` added code lines the ratio decides, below it the
-absolute net decides. Applying both to every commit would flag large,
-proportionately-commented changes.
+The gate's two rules are **complementary, not overlapping**: at or above
+`--min-code-lines` added code lines the ratio decides, below it the absolute net
+decides. Applying both to every commit would flag large, proportionately-commented
+changes. These are the main command's `--max-ratio` and `--max-net-small` with
+hook defaults, so CI can apply the same rule.
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `COMMENTBUSTER_MAX_RATIO` | `0.15` | Ratio ceiling for larger commits |
-| `COMMENTBUSTER_MAX_NET_SMALL` | `5` | Net ceiling for small commits |
-| `COMMENTBUSTER_MIN_CODE_LINES` | `20` | Boundary between the two rules |
-| `COMMENTBUSTER_BIN` | — | Path to the binary (default: next to the hook, then `commentbuster` on PATH) |
-| `COMMENTBUSTER_SKIP` | — | Set to anything to bypass the gate |
+| Flag | Variable | Default | Meaning |
+|---|---|---|---|
+| `--max-ratio P` | `COMMENTBUSTER_MAX_RATIO` | `0.15` | Ratio ceiling for larger commits |
+| `--max-net-small N` | `COMMENTBUSTER_MAX_NET_SMALL` | `5` | Net ceiling for small commits |
+| `--min-code-lines N` | `COMMENTBUSTER_MIN_CODE_LINES` | `20` | Boundary between the two rules |
+| | `COMMENTBUSTER_SKIP` | — | Set to anything to bypass the gate |
 
-A missing binary never blocks a commit — the gate warns on stderr and allows it.
+Flags win over variables, so a project can pin its budget in the settings entry:
+`"command": "$HOME/.local/bin/commentbuster claude-gate --max-ratio 0.1"`.
 
 ### git pre-commit
 
@@ -193,7 +197,7 @@ Known limits, all deliberate for v1 and covered by tests:
 
 ```sh
 cargo build --release                             # target/release/commentbuster
-cargo test                                        # 39 tests
+cargo test                                        # 63 tests
 CB=$PWD/target/release/commentbuster \
   ./demo/capture-evidence.sh /tmp/cb-evidence     # rebuild the demo runs
 ```

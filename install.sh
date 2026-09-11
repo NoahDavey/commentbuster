@@ -1,11 +1,11 @@
 #!/bin/sh
-# Install commentbuster and its Claude Code hook from a GitHub release.
+# Install commentbuster from a GitHub release.
 #
 #   curl -fsSL https://raw.githubusercontent.com/NoahDavey/commentbuster/main/install.sh | sh
 #
 # Environment variables:
 #   COMMENTBUSTER_VERSION       release tag to install, e.g. v0.1.0   (default: latest)
-#   COMMENTBUSTER_INSTALL_DIR   directory for the executables          (default: ~/.local/bin)
+#   COMMENTBUSTER_INSTALL_DIR   directory for the executable           (default: ~/.local/bin)
 set -eu
 
 REPO="NoahDavey/commentbuster"
@@ -58,10 +58,9 @@ fi
 tar xzf "$tmp/$asset" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$tmp/$BIN-$target/$BIN" "$INSTALL_DIR/$BIN"
-install -m 755 "$tmp/$BIN-$target/$BIN-claude-gate" "$INSTALL_DIR/$BIN-claude-gate"
 
 echo "Installed $("$INSTALL_DIR/$BIN" --version) to $INSTALL_DIR"
-echo "Claude Code hook: $INSTALL_DIR/$BIN-claude-gate"
+echo "Claude Code hook command: $INSTALL_DIR/$BIN claude-gate"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;

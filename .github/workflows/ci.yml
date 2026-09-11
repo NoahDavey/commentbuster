@@ -22,4 +22,4 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
-      - run: shellcheck hooks/claude-precommit-gate.sh install.sh
+      - run: shellcheck install.sh
