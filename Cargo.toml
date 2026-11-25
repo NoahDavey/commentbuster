@@ -1,6 +1,6 @@
 [package]
 name = "commentbuster"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Count net comment lines added in a git diff (Java, Kotlin, TypeScript)"
@@ -22,6 +22,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.151"
 similar = "3.2"
 tree-sitter = "0.27"
+tree-sitter-bash = "0.25.1"
 tree-sitter-java = "0.23.5"
 tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-typescript = "0.23.2"

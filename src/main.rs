@@ -1,10 +1,11 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use commentbuster::analyze::{analyze, resolve_mode};
 use commentbuster::gate::{self, Thresholds};
-use commentbuster::git;
+use commentbuster::git::Repo;
 use commentbuster::hook::{self, Decision};
 use commentbuster::report::{self, Report};
 use std::io::{IsTerminal, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -92,11 +93,15 @@ enum Command {
     /// Claude Code PreToolUse hook: deny `git commit` when the staged diff is over budget
     ///
     /// Reads the pending tool call from stdin. Anything but a `git commit` is
-    /// allowed untouched. A commit is checked as index vs HEAD with two
+    /// allowed untouched. A commit is checked as index vs HEAD (HEAD^ for
+    /// --amend) in the repository the command would run in, with two
     /// complementary rules: at or above --min-code-lines added code lines the
-    /// ratio decides, below it the absolute net decides. A breach prints a
-    /// PreToolUse deny decision the model can act on; everything else, including
-    /// the gate's own failures, prints nothing. The exit code is always 0.
+    /// ratio decides, below it the absolute net decides. A call that also
+    /// changes the index, or commits something other than the index, is denied
+    /// with a request to split it. Commits during a merge, rebase, cherry-pick
+    /// or revert are allowed. A denial is a PreToolUse decision on stdout;
+    /// everything else, including the gate's own failures, prints nothing to
+    /// stdout. The exit code is 0 unless a flag is invalid.
     ClaudeGate(ClaudeGate),
 }
 
@@ -109,8 +114,8 @@ SETTINGS
       { \"type\": \"command\", \"command\": \"$HOME/.local/bin/commentbuster claude-gate\" }
     ]}]}
 
-  Flags win over the environment variables. COMMENTBUSTER_SKIP set to anything
-  bypasses the gate.")]
+  Flags win over the environment variables. A person can set COMMENTBUSTER_SKIP
+  to anything in the environment Claude Code starts in to bypass the gate.")]
 struct ClaudeGate {
     /// Ratio ceiling for commits adding at least --min-code-lines code lines
     #[arg(long, value_name = "P", env = "COMMENTBUSTER_MAX_RATIO", default_value_t = 0.15)]
@@ -162,9 +167,9 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         check_ratio(p)?;
     }
 
-    let root = git::repo_root()?;
-    let mode = resolve_mode(&cli.refs, cli.staged, cli.direct)?;
-    let analysis = analyze(&root, &mode, &cli.paths)?;
+    let repo = Repo::discover(Path::new("."))?;
+    let mode = resolve_mode(&repo, &cli.refs, cli.staged, cli.direct)?;
+    let analysis = analyze(&repo, &mode, &cli.paths)?;
 
     let thresholds = Thresholds {
         max_net: cli.max_net,

@@ -99,37 +99,51 @@ impl Repo {
     /// and any tuning in the environment. The gate's own variables are cleared
     /// first so a developer's shell cannot leak into the assertions.
     pub fn run_hook(&self, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> (i32, String, String) {
-        use std::io::Write as _;
-        use std::process::Stdio;
-
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_commentbuster"));
-        cmd.args(args).current_dir(&self.dir);
-        for var in [
-            "COMMENTBUSTER_SKIP",
-            "COMMENTBUSTER_MAX_RATIO",
-            "COMMENTBUSTER_MAX_NET_SMALL",
-            "COMMENTBUSTER_MIN_CODE_LINES",
-        ] {
-            cmd.env_remove(var);
-        }
-        cmd.envs(envs.iter().copied());
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn commentbuster");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(stdin.as_bytes())
-            .expect("write payload");
-        let out = child.wait_with_output().expect("wait for commentbuster");
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).to_string(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        )
+        run_hook_from(&self.dir, args, stdin, envs)
     }
+
+    pub fn path(&self) -> &str {
+        self.dir.to_str().expect("utf-8 path")
+    }
+}
+
+/// `Repo::run_hook` with the hook process started in `dir`.
+pub fn run_hook_from(
+    dir: &Path,
+    args: &[&str],
+    stdin: &str,
+    envs: &[(&str, &str)],
+) -> (i32, String, String) {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_commentbuster"));
+    cmd.args(args).current_dir(dir);
+    for var in [
+        "COMMENTBUSTER_SKIP",
+        "COMMENTBUSTER_MAX_RATIO",
+        "COMMENTBUSTER_MAX_NET_SMALL",
+        "COMMENTBUSTER_MIN_CODE_LINES",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.envs(envs.iter().copied());
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn commentbuster");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write payload");
+    let out = child.wait_with_output().expect("wait for commentbuster");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
 }
