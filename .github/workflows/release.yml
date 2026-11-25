@@ -1,4 +1,4 @@
-# Cut a release by tagging: `git tag v0.2.0 && git push origin v0.2.0`.
+# Cut a release by tagging: `git tag v0.3.0 && git push origin v0.3.0`.
 # The tag must match the version in Cargo.toml.
 name: Release
 
@@ -77,3 +77,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  # npm trusted publishing: the registry accepts this workflow's OIDC identity,
+  # so there is no token to store. Each package on npmjs.com has to name this
+  # repository and `release.yml` as a trusted publisher with `npm publish`
+  # allowed.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 and Node 22.14.0 or later.
+      - run: npm install --global npm@11.21.3
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release download "$GITHUB_REF_NAME" --dir dist
+      - name: Publish to npm
+        run: node npm/publish.mjs dist

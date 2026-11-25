@@ -23,3 +23,13 @@ jobs:
       - uses: actions/checkout@v5
       - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
       - run: shellcheck install.sh
+
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node --test npm/test/
