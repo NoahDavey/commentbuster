@@ -32,4 +32,4 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - run: node --test npm/test/
+      - run: node --test npm/test/publish.test.mjs

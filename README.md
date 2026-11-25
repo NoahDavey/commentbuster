@@ -255,7 +255,7 @@ Known limits, all deliberate for v1 and covered by tests:
 ```sh
 cargo build --release                             # target/release/commentbuster
 cargo test                                        # 99 tests
-node --test npm/test/                             # the npm packages
+node --test npm/test/publish.test.mjs              # the npm packages
 CB=$PWD/target/release/commentbuster \
   ./demo/capture-evidence.sh /tmp/cb-evidence     # rebuild the demo runs
 ```
