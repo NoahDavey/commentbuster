@@ -34,18 +34,38 @@ commentbuster  main...HEAD (merge-base 6abe7c9dc)
 ## Install
 
 Prebuilt binaries for macOS (Apple Silicon, Intel) and Linux (x86_64, arm64) are
-attached to each [release](https://github.com/NoahDavey/commentbuster/releases).
-The install script picks the right one, verifies its checksum, and puts
-`commentbuster` in `~/.local/bin`:
+attached to each [release](https://github.com/NoahDavey/commentbuster/releases) and
+published to npm.
+
+With the install script, which picks the right binary, verifies its checksum and
+puts `commentbuster` in `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/NoahDavey/commentbuster/main/install.sh | sh
 ```
 
-`COMMENTBUSTER_INSTALL_DIR` changes the directory; `COMMENTBUSTER_VERSION=v0.2.0`
-pins a release. With a Rust toolchain, `cargo install --git
-https://github.com/NoahDavey/commentbuster --locked` builds it instead. One binary,
-no runtime dependencies; the Claude Code hook is a subcommand of it.
+`COMMENTBUSTER_INSTALL_DIR` changes the directory; `COMMENTBUSTER_VERSION=v0.3.0`
+pins a release.
+
+From npm, with no separate install step:
+
+```sh
+bunx @havella/commentbuster@0.3.0 --staged --pretty
+npx @havella/commentbuster@0.3.0 --staged --pretty
+npm install --save-dev --save-exact @havella/commentbuster@0.3.0
+```
+
+`@havella/commentbuster` is a small Node launcher. The binary comes from an
+optional dependency for your platform, so nothing runs at install time and
+`--ignore-scripts` is fine; `--omit=optional` is not. The Linux binaries need
+glibc 2.39 or later. The launcher adds a Node start to every run (about 25 ms), so
+the installed binary is the faster choice for a hook.
+
+With a Rust toolchain, `cargo install --git
+https://github.com/NoahDavey/commentbuster --locked` builds it instead.
+
+The binary itself has no runtime dependencies; the Claude Code hook is a subcommand
+of it.
 
 ## Usage
 
@@ -117,7 +137,25 @@ Set `COMMENTBUSTER_VERSION` on the install step to pin a release.
 call it is about to run; the hook ignores everything but `git commit`, checks the
 staged budget, and on a breach returns a denial the model can act on. Wire it into
 a project's `.claude/settings.json` (team-wide) or `.claude/settings.local.json`
-(personal, gitignored):
+(personal, gitignored). From npm, pinned and with nothing to install:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "bunx @havella/commentbuster@0.3.0 claude-gate",
+        "timeout": 20,
+        "statusMessage": "Checking comment budget"
+      }]
+    }]
+  }
+}
+```
+
+Or with the installed binary, which adds the least to each Bash call:
 
 ```json
 {
@@ -135,13 +173,32 @@ a project's `.claude/settings.json` (team-wide) or `.claude/settings.local.json`
 }
 ```
 
-A teammate who has not installed the binary yet gets `command not found` on
-stderr and their commit goes through, because Claude Code blocks only on exit
+A teammate who has not installed the binary (or bun) yet gets `command not found`
+on stderr and their commit goes through, because Claude Code blocks only on exit
 code 2. So the hook can land in a team's settings before everyone has run the
 installer. The gate's own failures allow too: an unreadable payload or a
-directory that is not a git repo never stops a commit. A misconfigured flag does
-block, with the usage error, so it gets noticed instead of silently disabling the
-gate.
+directory that is not a git repo never stops a commit, and the npm launcher exits 1
+when it has no binary to run. A misconfigured flag does block, with the usage
+error, so it gets noticed instead of silently disabling the gate.
+
+What it does with a command:
+
+- The command is parsed as shell, so a commit is found behind `cd x &&`,
+  `FOO=1`, `env`, `bash -c '...'`, `git -C x`, inside `if`, loops, subshells and
+  `$(...)`, and a message or heredoc that mentions git commands is not mistaken
+  for one.
+- It looks at the repository the commit would run in: the session's directory,
+  then any literal `cd`, then `git -C`. Linked worktrees use their own index.
+- The hook runs before the command, so **staging and committing must be separate
+  Bash calls**. `git add -A && git commit`, `git commit -a`/`-p`/`-i`/`-o`,
+  `git commit <path>` and two commits in one call are denied with a message that
+  says so.
+- `--amend` is measured from HEAD's parent, so amending repeatedly does not add
+  up to more than one budget. Amending a merge commit is allowed.
+- Commits during a merge, rebase, cherry-pick or revert are allowed: their
+  comments are mostly someone else's.
+- What the text does not settle is allowed: `eval`, aliases, shell functions,
+  scripts, `$GIT commit`, `cd "$DIR"`, `--git-dir`/`GIT_DIR`, unparseable shell.
 
 It beats a git `pre-commit` hook for the agent case on three counts: it intercepts
 the Bash tool call rather than git's hook chain, so `--no-verify` does not get
@@ -159,7 +216,7 @@ hook defaults, so CI can apply the same rule.
 | `--max-ratio P` | `COMMENTBUSTER_MAX_RATIO` | `0.15` | Ratio ceiling for larger commits |
 | `--max-net-small N` | `COMMENTBUSTER_MAX_NET_SMALL` | `5` | Net ceiling for small commits |
 | `--min-code-lines N` | `COMMENTBUSTER_MIN_CODE_LINES` | `20` | Boundary between the two rules |
-| | `COMMENTBUSTER_SKIP` | — | Set to anything to bypass the gate |
+| | `COMMENTBUSTER_SKIP` | — | For people: set to anything in Claude Code's own environment to bypass the gate. Setting it in the command has no effect, and denials do not mention it |
 
 Flags win over variables, so a project can pin its budget in the settings entry:
 `"command": "$HOME/.local/bin/commentbuster claude-gate --max-ratio 0.1"`.
@@ -197,9 +254,23 @@ Known limits, all deliberate for v1 and covered by tests:
 
 ```sh
 cargo build --release                             # target/release/commentbuster
-cargo test                                        # 63 tests
+cargo test                                        # 99 tests
+node --test npm/test/publish.test.mjs              # the npm packages
 CB=$PWD/target/release/commentbuster \
   ./demo/capture-evidence.sh /tmp/cb-evidence     # rebuild the demo runs
 ```
 
 `SPEC.md` is the specification, including what implementation changed and why.
+
+### Releasing
+
+Bump `Cargo.toml`, merge, then tag `v<version>`. The release workflow builds the
+binaries, creates the GitHub release and publishes the npm packages with trusted
+publishing. The same script publishes by hand from a downloaded release, and
+skips whatever is already on npm:
+
+```sh
+gh release download v0.3.0 --dir release
+node npm/publish.mjs release --dry-run
+node npm/publish.mjs release
+```

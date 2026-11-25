@@ -1,8 +1,7 @@
 # commentbuster — Specification
 
-**Status:** v1 implemented and tested. 38 tests passing. See §10 for what
-implementation changed.
-**Date:** 2026-09-08
+**Status:** v1 implemented and tested. See §10 for what implementation changed.
+**Date:** 2026-09-08; `claude-gate` and npm distribution revised 2026-11-26 for 0.3.0
 
 ---
 
@@ -138,22 +137,62 @@ The Claude Code `PreToolUse` hook, so the hook needs nothing but the binary.
 Claude Code writes a JSON description of the pending tool call to stdin; the
 subcommand:
 
-1. Extracts `tool_input.command` and allows, printing nothing, unless `git` starts
-   a shell segment and `commit` follows it as a whole word in that segment.
-   `git add -A && git commit -m x` is a commit; `echo "git commit"` is not.
-2. Analyses index vs `HEAD` with `--max-ratio` (default `0.15`) and
-   `--max-net-small` (default `5`) around `--min-code-lines` (default `20`). Each
-   flag falls back to `COMMENTBUSTER_MAX_RATIO`, `COMMENTBUSTER_MAX_NET_SMALL`,
+1. Extracts `tool_input.command` and `cwd`. A command that does not contain
+   `commit` is allowed without parsing.
+2. Finds the `git commit`s the command would run, and where (below). None, or
+   only ones it cannot place, allows.
+3. Allows a commit in a work tree where a merge, rebase, cherry-pick or revert is
+   in progress, judged by `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`,
+   `rebase-merge`, `rebase-apply` and `sequencer`, located with
+   `git rev-parse --git-path`.
+4. Denies a commit whose index is not final (below).
+5. Analyses the index vs `HEAD`, or for `--amend` vs `HEAD^` (the empty tree when
+   `HEAD` is a root commit; a merge commit is allowed), with `--max-ratio`
+   (default `0.15`) and `--max-net-small` (default `5`) around
+   `--min-code-lines` (default `20`). Each flag falls back to
+   `COMMENTBUSTER_MAX_RATIO`, `COMMENTBUSTER_MAX_NET_SMALL`,
    `COMMENTBUSTER_MIN_CODE_LINES`.
-3. On a breach prints `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+6. On a breach prints `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
    "permissionDecision": "deny", "permissionDecisionReason": …}}`, naming the
-   rule, the worst files and what to cut.
+   rule, the worst files, what to cut, and how to report a comment that is
+   essential but does not fit.
+
+**Finding commits.** The command is parsed with tree-sitter-bash and walked in
+execution order. `commit` must be git's subcommand after its global options.
+Prefix assignments, `env`, `command`, `exec`, `time`, `timeout`, `nice`, `nohup`,
+`stdbuf`, `xargs` and a literal `bash -c` string are followed; compound commands,
+subshells and substitutions are entered. Heredocs are removed before parsing,
+because their bodies are input and the grammar cannot parse everything that may
+follow the operator on its line. Nothing at or after a parse error is trusted.
+`--dry-run`, `--help` and the status formats that imply `--dry-run` are not commits.
+What the text does not settle allows: `eval`, aliases, functions, scripts, a
+variable as the command or subcommand, `--git-dir`, `--work-tree` and the
+environment variables that relocate git.
+
+**Placing commits.** The payload's `cwd`, then `cd`/`pushd`/`popd` and `env -C`,
+then `git -C`. A subshell's `cd` does not leak. A path with an expansion or glob,
+or branches that disagree, makes the directory unknown until the next absolute
+`cd`. Every git command runs at the root of the work tree found there.
+
+**When the index is not final.** PreToolUse runs before the command, so the call
+is denied with a request to stage in one call and commit in the next when it
+runs an index-changing git subcommand before the commit (or anywhere in a loop
+around it), when the commit uses `--all`, `--patch`, `--interactive`,
+`--include`, `--only` or a pathspec, or when it runs more than one `git commit`.
+Options are parsed as git parses them: clusters, attached and separate values,
+unambiguous abbreviations, `--no-` forms. A word known only at run time counts as
+a pathspec after `--` or when it starts with literal text, and is otherwise
+ignored.
 
 The exit code is 0 on every path except a usage error. An explicit "allow" is
 never printed: it would skip Claude Code's permission prompt. Failures of the gate
 itself (not a git repo, unreadable payload) allow with a note on stderr, since
 Claude Code blocks only on exit 2 and a gate that blocks because of its own
-trouble gets disabled. `COMMENTBUSTER_SKIP` set to anything bypasses it.
+trouble gets disabled. `COMMENTBUSTER_SKIP` set to anything in the hook's own
+environment bypasses it; it is for people, so no denial mentions it.
+
+Known limits: a first commit in a repository with no `HEAD` is allowed, and so is
+a commit made by a function defined in the same call.
 
 ---
 
@@ -293,9 +332,18 @@ reporting zero.
 
 ### Distribution
 
-- GitHub release artifacts: `darwin-arm64`, `darwin-x64`, `linux-x64-musl`, `linux-arm64-musl`.
+- GitHub release artifacts: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+  `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`.
 - A `curl | sh` install script.
-- An npm wrapper package so `npx commentbuster` works in a JS pre-commit hook with no separate install step.
+- npm: `@havella/commentbuster`, a Node launcher with exact-version
+  `optionalDependencies` on `@havella/commentbuster-{darwin,linux}-{arm64,x64}`,
+  which hold the binaries and are selected by `os` and `cpu`. No install scripts.
+  The launcher inherits stdio and returns the binary's exit code; its own
+  failures exit 1, never 2.
+- `npm/publish.mjs` builds those packages from a release's tarballs, checks them
+  against `SHA256SUMS` and the version in `Cargo.toml`, and publishes the platform
+  packages first, skipping versions already on npm. The release workflow runs it
+  with npm trusted publishing and provenance, with no stored token.
 
 ---
 
@@ -305,12 +353,14 @@ reporting zero.
 - **Diff-shape fixtures:** pure addition, pure deletion, rename with no content change (must net to zero), rename with edits, new file, deleted file, mode change, comment-only diff (`code_lines_added` 0 → `ratio` null).
 - **Range semantics:** merge-base vs `--direct` on a branch whose base has advanced — asserting the moved base contributes nothing.
 - **Gate matrix:** each threshold, each exit code, `--min-code-lines` suppression, `--max-ratio` and `--max-net-small` never both applying to one diff.
-- **Hook protocol:** commit detection against mentions and chained commands, deny JSON shape, silent allow, flag over environment precedence, skip variable, out-of-repo and garbage-payload tolerance.
+- **Hook protocol:** deny JSON shape, silent allow, flag over environment precedence, skip variable, out-of-repo and garbage-payload tolerance.
+- **Hook commands:** detection, target repository, staging, merges, rebases and amends, each against real repositories including linked worktrees, with the hook process started elsewhere. The shell walker's reading is compared with what bash runs.
+- **npm:** the publish script and launcher against an in-process registry, installed with `--ignore-scripts`.
 - **Golden JSON** snapshots for the output schema.
 - **Timing regression test** on a synthetic several-hundred-file diff.
 
 Measured on this machine (M-series, release build): a 400-file diff carrying
-16,800 added comment lines is analysed in **170–200 ms**; the binary is **7.7 MB**
+16,800 added comment lines is analysed in **170–200 ms**; the binary is **9.2 MB**
 and links only `libSystem`.
 
 ---
@@ -341,6 +391,10 @@ Recorded so the spec matches the code.
 | `--top N` added, default 20 | Found by running the tool on a 400-file diff: `--pretty` printed 400 rows. JSON is never truncated. |
 | `gate.skipped_rules` added to the JSON | So a green result never quietly means "the gate never ran". |
 | `--max-net-small N` added | The ratio floor leaves small diffs ungated, and a flat `--max-net` tight enough for them caps large, proportionately-commented diffs. A net ceiling that applies only below the floor is the complement the ratio needs. |
+| Commits found by parsing the shell command | Splitting the string on separators missed `FOO=1 git commit`, `env`, full paths and `bash -c`, matched `git log --grep=commit`, and could not tell where a commit would run. |
+| Staging and committing in one call is denied | The hook sees the index before the call runs, so `git add -A && git commit` and `git commit -a` were checked against the wrong content. |
+| `--amend` is compared with `HEAD^` | Against `HEAD`, any number of in-budget amends passed one after another. |
+| npm packages under `@havella` | The wrapper listed under Distribution, as platform packages so nothing runs at install time. |
 | `claude-gate` subcommand replaces the shell hook | The shell hook reimplemented the thresholds in Python and needed `python3`, against the single-binary constraint in §1. The binary now speaks the PreToolUse protocol itself: one gate implementation, tested. |
 
 ### One interaction worth knowing before setting a CI budget

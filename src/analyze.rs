@@ -2,7 +2,7 @@
 //! comment, and which lines the line-diff moved — into the report.
 
 use crate::classify::{classify, LineFlags};
-use crate::git::{self, RawEntry, NULL_SHA};
+use crate::git::{RawEntry, Repo, NULL_SHA};
 use crate::lang::Language;
 use anyhow::{bail, Result};
 use rayon::prelude::*;
@@ -15,6 +15,8 @@ pub const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 pub enum Mode {
     Worktree,
     Staged,
+    /// Index against a tree or commit other than HEAD.
+    StagedFrom(String),
     Range {
         base_ref: String,
         head_ref: String,
@@ -29,6 +31,7 @@ impl Mode {
         match self {
             Mode::Worktree => vec!["HEAD".into()],
             Mode::Staged => vec!["--cached".into(), "HEAD".into()],
+            Mode::StagedFrom(base) => vec!["--cached".into(), base.clone()],
             Mode::Range { base_sha, head_sha, .. } => vec![base_sha.clone(), head_sha.clone()],
         }
     }
@@ -36,7 +39,7 @@ impl Mode {
     fn label(&self) -> &'static str {
         match self {
             Mode::Worktree => "worktree",
-            Mode::Staged => "staged",
+            Mode::Staged | Mode::StagedFrom(_) => "staged",
             Mode::Range { merge_base: true, .. } => "merge-base",
             Mode::Range { merge_base: false, .. } => "direct",
         }
@@ -105,8 +108,8 @@ enum Outcome {
     Skipped(Skip),
 }
 
-pub fn analyze(repo_root: &str, mode: &Mode, paths: &[String]) -> Result<Analysis> {
-    let entries = git::raw_diff(&mode.diff_args(), paths)?;
+pub fn analyze(repo: &Repo, mode: &Mode, paths: &[String]) -> Result<Analysis> {
+    let entries = repo.raw_diff(&mode.diff_args(), paths)?;
 
     // Which files can we even parse? Decide before fetching any content.
     let mut in_scope: Vec<(RawEntry, Option<Language>, Option<Language>)> = Vec::new();
@@ -138,11 +141,11 @@ pub fn analyze(repo_root: &str, mode: &Mode, paths: &[String]) -> Result<Analysi
     }
     wanted.sort();
     wanted.dedup();
-    let blobs = git::cat_file_batch(&wanted)?;
+    let blobs = repo.cat_file_batch(&wanted)?;
 
     let outcomes: Vec<Outcome> = in_scope
         .par_iter()
-        .map(|(e, old_lang, new_lang)| analyze_one(repo_root, e, *old_lang, *new_lang, &blobs))
+        .map(|(e, old_lang, new_lang)| analyze_one(&repo.root, e, *old_lang, *new_lang, &blobs))
         .collect();
 
     let mut files = Vec::new();
@@ -182,7 +185,14 @@ pub fn analyze(repo_root: &str, mode: &Mode, paths: &[String]) -> Result<Analysi
             mode: mode.label().to_string(),
             base_ref: Some("HEAD".into()),
             head_ref: None,
-            base_sha: git::rev_parse("HEAD").ok(),
+            base_sha: repo.rev_parse("HEAD").ok(),
+            head_sha: None,
+        },
+        Mode::StagedFrom(base) => RangeInfo {
+            mode: mode.label().to_string(),
+            base_ref: Some(base.clone()),
+            head_ref: None,
+            base_sha: Some(base.clone()),
             head_sha: None,
         },
         Mode::Range { base_ref, head_ref, base_sha, head_sha, .. } => RangeInfo {
@@ -320,7 +330,7 @@ pub fn changed_lines(old: &[u8], new: &[u8]) -> (Vec<usize>, Vec<usize>) {
 }
 
 /// Resolve the CLI's ref arguments into a comparison mode.
-pub fn resolve_mode(refs: &[String], staged: bool, direct: bool) -> Result<Mode> {
+pub fn resolve_mode(repo: &Repo, refs: &[String], staged: bool, direct: bool) -> Result<Mode> {
     if staged && !refs.is_empty() {
         bail!("--staged compares the index against HEAD and takes no ref arguments");
     }
@@ -332,12 +342,12 @@ pub fn resolve_mode(refs: &[String], staged: bool, direct: bool) -> Result<Mode>
         1 | 2 => {
             let base_ref = refs[0].clone();
             let head_ref = refs.get(1).cloned().unwrap_or_else(|| "HEAD".into());
-            let head_sha = git::rev_parse(&head_ref)?;
-            let base_resolved = git::rev_parse(&base_ref)?;
+            let head_sha = repo.rev_parse(&head_ref)?;
+            let base_resolved = repo.rev_parse(&base_ref)?;
             let base_sha = if direct {
                 base_resolved
             } else {
-                git::merge_base(&base_resolved, &head_sha)?
+                repo.merge_base(&base_resolved, &head_sha)?
             };
             Ok(Mode::Range {
                 base_ref,

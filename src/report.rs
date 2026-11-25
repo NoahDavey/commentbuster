@@ -82,6 +82,7 @@ fn header(mode: &Mode, a: &Analysis) -> String {
             "index vs HEAD ({})",
             a.range.base_sha.as_deref().map(short_sha).unwrap_or_default()
         ),
+        Mode::StagedFrom(base) => format!("index vs {}", short_sha(base)),
         Mode::Range { base_ref, head_ref, base_sha, merge_base: true, .. } => format!(
             "{base_ref}...{head_ref} (merge-base {})",
             short_sha(base_sha)
